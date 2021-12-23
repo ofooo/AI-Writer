@@ -7,6 +7,7 @@ import logging
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +40,7 @@ class RWKV_TimeMix(nn.Module):
         B, T, C = x.size()
 
         x = torch.cat(
-            [self.time_shift(x[:, :, :C//2]), x[:, :, C//2:]], dim=-1)
+            [self.time_shift(x[:, :, :C // 2]), x[:, :, C // 2:]], dim=-1)
 
         k = self.key(x)
         v = self.value(x)
@@ -51,13 +52,14 @@ class RWKV_TimeMix(nn.Module):
 
         kv = (k * v).view(B, T, self.n_head, self.head_size)
 
-        wkv = (torch.einsum('htu,buhc->bthc', self.time_ww[:,:T,:T], kv)
+        wkv = (torch.einsum('htu,buhc->bthc', self.time_ww[:, :T, :T], kv)
                ).contiguous().view(B, T, -1)
 
         rwkv = torch.sigmoid(r) * wkv / sum_k
 
         rwkv = self.output(rwkv)
         return rwkv * self.time_gamma[:T, :]
+
 
 class RWKV_ChannelMix(nn.Module):
     def __init__(self, config, layer_id):
@@ -77,8 +79,7 @@ class RWKV_ChannelMix(nn.Module):
     def forward(self, x):
         B, T, C = x.size()
 
-        x = torch.cat(
-            [self.time_shift(x[:, :, :C//2]), x[:, :, C//2:]], dim=-1)
+        x = torch.cat([self.time_shift(x[:, :, :C // 2]), x[:, :, C // 2:]], dim=-1)
         k = self.key(x)
         v = self.value(x)
         r = self.receptance(x)
@@ -110,11 +111,22 @@ class Block(nn.Module):
         self.mlp = RWKV_ChannelMix(config, layer_id)
 
     def forward(self, x):
-
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
 
         return x
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, d):
+        super().__init__()
+        self.dd = d ** (-1. / 2)
+        self.weight = nn.Parameter(torch.ones(d))
+
+    def forward(self, x):
+        norm_x = x.norm(2, dim=-1, keepdim=True)
+        x_normed = x / (norm_x * self.dd + 1e-12)
+        return self.weight * x_normed
 
 
 class GPT(nn.Module):
@@ -125,7 +137,7 @@ class GPT(nn.Module):
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
 
         self.blocks = nn.Sequential(*[Block(config, i)
-                                    for i in range(config.n_layer)])
+                                      for i in range(config.n_layer)])
 
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.time_out = nn.Parameter(torch.ones(1, config.ctx_len, 1))
@@ -134,7 +146,7 @@ class GPT(nn.Module):
         self.ctx_len = config.ctx_len
 
         logger.info("number of parameters: %e", sum(p.numel()
-                    for p in self.parameters()))
+                                                    for p in self.parameters()))
 
     def get_ctx_len(self):
         return self.ctx_len
@@ -156,3 +168,36 @@ class GPT(nn.Module):
             loss = F.cross_entropy(x.view(-1, x.size(-1)), targets.view(-1))
 
         return x, loss
+
+    def configure_optimizers(self, train_config):
+        # separate out all parameters to those that will and won't experience regularizing weight decay
+        decay = set()
+        no_decay = set()
+
+        whitelist_weight_modules = (nn.Linear,)
+        blacklist_weight_modules = (RMSNorm, nn.LayerNorm, nn.Embedding)
+        for mn, m in self.named_modules():
+            for pn, p in m.named_parameters():
+                fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
+
+                if pn.endswith('bias') or ('time' in fpn) or ('head' in fpn):
+                    no_decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+                    no_decay.add(fpn)
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        inter_params = decay & no_decay
+        union_params = decay | no_decay
+        assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
+        assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
+                                                           % (str(param_dict.keys() - union_params),)
+
+        optim_groups = [
+            {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": train_config.weight_decay},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
+        ]
+        optimizer = torch.optim.AdamW(optim_groups, lr=train_config.learning_rate, betas=train_config.betas, eps=train_config.eps)
+        return optimizer

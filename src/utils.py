@@ -1,18 +1,16 @@
-########################################################################################################
-# AI人工智障写作 - https://github.com/BlinkDL/AI-Writer
-########################################################################################################
-
 import random
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
 def top_k_logits(logits, k):
     v, ix = torch.topk(logits, k)
     out = logits.clone()
     out[out < v[:, [-1]]] = -float('Inf')
     return out
+
 
 def top_p_probs(probs, p):
     out = probs.clone()
@@ -21,11 +19,12 @@ def top_p_probs(probs, p):
     cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
     sorted_indices_to_remove = cumulative_probs > p
     sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-    sorted_indices_to_remove[..., 0] = 0    
+    sorted_indices_to_remove[..., 0] = 0
     indices_to_remove = sorted_indices[sorted_indices_to_remove]
     out[indices_to_remove] = 0
 
     return out
+
 
 # top-p + top-k + pow&ratio sampling
 def sample_logits(logits, pos, temperature=1.0, top_k=None, top_p=None, min_p_pow=None, min_p_ratio=None):
@@ -42,6 +41,7 @@ def sample_logits(logits, pos, temperature=1.0, top_k=None, top_p=None, min_p_po
     ix = torch.multinomial(probs, num_samples=1)
 
     return ix[0][0].cpu()
+
 
 def set_seed(seed):
     random.seed(seed)

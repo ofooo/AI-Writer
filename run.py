@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-########################################################################################################
-# AI人工智障写作 - https://github.com/BlinkDL/AI-Writer
-########################################################################################################
 
 import numpy as np
 import math, json
@@ -14,26 +11,22 @@ from src.model import GPT, GPTConfig
 
 # src.utils.set_seed(42) # 是否固定随机数（固定后每次运行的生成结果都一样）
 
-print('\nAI人工智障写作 https://github.com/BlinkDL/AI-Writer')
-print('请关注我的知乎 https://zhuanlan.zhihu.com/p/423646620')
-print('\n声明：模型的训练数据全部来自网文，缺乏生活常识。生成的文字仅供娱乐。请遵守法律法规。')
-
-#
 # 需 pytorch 1.9.x 及以上版本
 #
 # gpu：只支持 nvidia 显卡，速度最快，需 cuda+cudnn
 # dml：支持 amd / intel / nvidia 显卡，需不同模型，需 pip install onnxruntime-directml 然后在 run.py 和 server.py 设置为 dml 模式
 # cpu：没显卡就选它，但也用 nvidia 卡的模型
 
-RUN_DEVICE = 'gpu' # gpu 或 dml 或 cpu
+# RUN_DEVICE = 'gpu' # gpu 或 dml 或 cpu
+RUN_DEVICE = 'cpu'
 
-MODEL_NAME = 'model/wangwen-2021-12-11' # 模型名
-WORD_NAME = 'model/wangwen-2021-12-11' # 这个也修改
+MODEL_NAME = 'model/novel_2021_12_23'  # 模型名
+WORD_NAME = 'model/novel_2021_12_23'  # 这个也修改
 
-NUM_OF_RUNS = 9999 # 写多少遍
-LENGTH_OF_EACH = 200 # 每次写多少字
+NUM_OF_RUNS = 9999  # 写多少遍
+LENGTH_OF_EACH = 200  # 每次写多少字
 
-min_p_ratio = 0.02 # 这个的范围是 0 到 1。越大，生成效果越规矩。越小，变化越多。自己试试 0 和 0.1 和 1.0 的效果就知道了
+min_p_ratio = 0.02  # 这个的范围是 0 到 1。越大，生成效果越规矩。越小，变化越多。自己试试 0 和 0.1 和 1.0 的效果就知道了
 
 # 开头这样输入：
 # context = "我"
@@ -67,7 +60,7 @@ context = '\n' + ('\n'.join(context)).strip()
 print('您输入的开头有 ' + str(len(context)) + ' 个字。注意，模型只会看最后 ' + str(ctx_len) + ' 个字。')
 
 with open(WORD_NAME + '.json', "r", encoding="utf-16") as result_file:
-    word_table = json.load(result_file)   
+    word_table = json.load(result_file)
 
 vocab_size = len(word_table)
 
@@ -79,6 +72,7 @@ UNKNOWN_CHAR = train_dataset.stoi['\ue083']
 print(f'\nLoading model for {RUN_DEVICE}...', end=' ')
 if RUN_DEVICE == 'dml':
     import onnxruntime as rt
+
     sess_options = rt.SessionOptions()
     sess_options.graph_optimization_level = rt.GraphOptimizationLevel.ORT_ENABLE_ALL
     sess_options.execution_mode = rt.ExecutionMode.ORT_SEQUENTIAL
@@ -94,21 +88,21 @@ else:
         time_alpha = m2[prefix + 'time_alpha']
         time_beta = m2[prefix + 'time_beta']
         mask = m2[prefix + 'mask']
-        
+
         TT = ctx_len
         T = ctx_len
         w = F.pad(time_w, (0, TT))
         w = torch.tile(w, [TT])
         w = w[:, :-TT].reshape(-1, TT, 2 * TT - 1)
-        w = w[:, :, TT-1:]
+        w = w[:, :, TT - 1:]
         w = w[:, :T, :T] * time_alpha[:, :, :T] * time_beta[:, :T, :]
-        w = w.masked_fill(mask[:T, :T] == 0, 0)    
-        
+        w = w.masked_fill(mask[:T, :T] == 0, 0)
+
         m2[prefix + 'time_ww'] = w
         del m2[prefix + 'time_w']
         del m2[prefix + 'time_alpha']
         del m2[prefix + 'time_beta']
-        del m2[prefix + 'mask']    
+        del m2[prefix + 'mask']
     if RUN_DEVICE == 'gpu':
         model = model.cuda()
     model.load_state_dict(m2)
@@ -123,12 +117,11 @@ for run in range(NUM_OF_RUNS):
 
     real_len = len(x)
     print_begin = 0
-        
+
     for i in range(LENGTH_OF_EACH):
 
         if i == 0:
-
-            print(('-' * 60) + '\n' + context.replace('\n', '\n  ').strip('\n'), end = '')
+            print(('-' * 60) + '\n' + context.replace('\n', '\n  ').strip('\n'), end='')
             print_begin = real_len
 
         with torch.no_grad():
@@ -140,23 +133,23 @@ for run in range(NUM_OF_RUNS):
                 out = rt_session.run(None, {rt_session.get_inputs()[0].name: [xxx[-ctx_len:]]})
                 out = torch.tensor(out[0])
             else:
-                xxx = torch.tensor(x[-ctx_len:], dtype=torch.long)[None,...]
+                xxx = torch.tensor(x[-ctx_len:], dtype=torch.long)[None, ...]
                 if RUN_DEVICE == 'gpu':
                     xxx = xxx.cuda()
-                out, _ = model(xxx)            
+                out, _ = model(xxx)
             out[:, :, UNKNOWN_CHAR] = -float('Inf')
         pos = -1 if real_len >= ctx_len else real_len - 1
 
-        if train_dataset.itos[int(x[real_len-1])] == '\n':
+        if train_dataset.itos[int(x[real_len - 1])] == '\n':
             char = src.utils.sample_logits(out, pos, temperature=1.0, top_p=0.995)
         else:
             char = src.utils.sample_logits(out, pos, temperature=1.0, min_p_pow=2.0, min_p_ratio=min_p_ratio)
-    
+
         x = np.append(x, char)
         real_len += 1
 
-        if i % 10 == 9 or i == LENGTH_OF_EACH-1 or i < 10 or RUN_DEVICE != 'gpu':
+        if i % 10 == 9 or i == LENGTH_OF_EACH - 1 or i < 10 or RUN_DEVICE != 'gpu':
             completion = ''.join([train_dataset.itos[int(i)] for i in x[print_begin:real_len]])
-            print(completion.replace('\n', '\n  '), end = '', flush=True)
+            print(completion.replace('\n', '\n  '), end='', flush=True)
             print_begin = real_len
     print()
